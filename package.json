@@ -1,0 +1,22 @@
+{
+  "name": "facesentry-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Privacy-First Windows Face Authentication & Auto-Lock Security System",
+  "scripts": {
+    "dev:web": "npm --prefix apps/web run dev",
+    "build:web": "npm --prefix apps/web run build",
+    "typecheck:web": "npm --prefix apps/web run typecheck",
+    "test:e2e": "npm --prefix apps/web run test:e2e"
+  },
+  "keywords": [
+    "biometric",
+    "windows",
+    "security",
+    "privacy-first",
+    "fastapi",
+    "nextjs"
+  ],
+  "author": "FaceSentry Team",
+  "license": "MIT"
+}
