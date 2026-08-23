@@ -112,6 +112,43 @@ async def finalize_enrollment():
             detail=f"Cannot finalize from state '{curr.state}'",
         )
 
+    # Verify the profile is actually saved to disk and valid
+    import asyncio
+    from packages.shared.constants import DEFAULT_ENROLLMENT_DIR
+    from apps.agent.facesentry_agent.biometric_storage import BiometricStorage, validate_template_embedding
+
+    storage = BiometricStorage(DEFAULT_ENROLLMENT_DIR)
+    profile_name = enrollment_state.active_user_id
+
+    # Wait up to 5 iterations of 300ms for the agent to finalize and save the profile
+    for _ in range(5):
+        if storage.has_profile(profile_name):
+            break
+        await asyncio.sleep(0.3)
+
+    if not storage.has_profile(profile_name):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="ENROLLMENT_STORAGE_FAILED: Encrypted profile not found or empty on disk.",
+        )
+
+    # Decrypt and validate the saved profile to ensure absolute integrity
+    try:
+        profile = storage.load_profile(profile_name)
+        if profile is None:
+            raise ValueError("Loaded profile is None.")
+        is_valid, validation_reason = validate_template_embedding(
+            profile.reference_embedding,
+            expected_dim=profile.embedding_dim,
+        )
+        if not is_valid:
+            raise ValueError(f"Profile embedding validation failed: {validation_reason}")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"ENROLLMENT_STORAGE_FAILED: Decryption or validation failed: {exc}",
+        )
+
     enrollment_state.status = EnrollmentStatusResponse(
         state="COMPLETED",
         progress=1.0,

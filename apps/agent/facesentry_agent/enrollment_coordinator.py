@@ -13,7 +13,7 @@ from packages.shared.schemas import EnrollmentStatusResponse
 from .models.face_detector import FaceDetector, DetectedFace
 from .models.face_recognizer import FaceRecognizer
 from .enrollment import FaceQualityGate, QualityAssessment, QualityGateConfig
-from .biometric_storage import BiometricStorage, EnrolledProfile
+from .biometric_storage import BiometricStorage, EnrolledProfile, validate_template_embedding
 from .models.face_recognizer import normalize_embedding
 
 logger = logging.getLogger("facesentry.enrollment.coordinator")
@@ -187,7 +187,6 @@ class EnrollmentCoordinator:
 
         if not self._liveness_confirmed:
             err = "Cannot finalize: Liveness verification has not been completed."
-            self._error_message = err
             return False, None, err
 
         try:
@@ -211,7 +210,25 @@ class EnrollmentCoordinator:
                 quality_metrics=agg_metrics,
             )
 
-            profile = storage.load_profile(self._user_id)
+            # Step 6: Verify the saved profile can be loaded back and is valid
+            try:
+                profile = storage.load_profile(self._user_id)
+                if profile is None:
+                    raise ValueError("Loaded profile is None.")
+                
+                is_valid, validation_reason = validate_template_embedding(
+                    profile.reference_embedding,
+                    expected_dim=profile.embedding_dim,
+                )
+                if not is_valid:
+                    raise ValueError(f"Biometric template validation failed: {validation_reason}")
+            except Exception as readback_err:
+                err = f"ENROLLMENT_STORAGE_FAILED: Profile read-back verification failed: {readback_err}"
+                self._state = "FAILED"
+                self._error_message = err
+                logger.error(err)
+                return False, None, err
+
             self._state = "COMPLETED"
             self._last_guidance = "READY"
             self._collected_embeddings.clear()

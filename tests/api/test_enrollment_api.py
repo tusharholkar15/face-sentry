@@ -61,14 +61,45 @@ def test_enrollment_finalize_invalid_transition(client):
 
 
 def test_enrollment_finalize_success_flow(client):
-    """Verify finalize succeeds when session is in PROCESSING / CAPTURING state."""
-    client.post("/api/v1/enrollment/start", json={"user_id": "test_user", "target_samples": 10})
+    """Verify finalize succeeds when profile is successfully persisted and valid."""
+    from packages.shared.constants import DEFAULT_ENROLLMENT_DIR
+    from apps.agent.facesentry_agent.biometric_storage import BiometricStorage
+    import numpy as np
+    import os
+    
+    storage = BiometricStorage(DEFAULT_ENROLLMENT_DIR)
+    
+    np.random.seed(42)
+    embedding = np.random.randn(128).astype(np.float32)
+    embedding /= np.linalg.norm(embedding)
+    
+    storage.save_profile(
+        profile_name="test_user",
+        reference_embedding=embedding,
+        sample_count=10,
+        quality_metrics={"sample_count": 10, "avg_confidence": 0.95}
+    )
+    
+    try:
+        client.post("/api/v1/enrollment/start", json={"user_id": "test_user", "target_samples": 10})
+        res = client.post("/api/v1/enrollment/finalize")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["state"] == "COMPLETED"
+        assert data["progress"] == 1.0
+        assert data["is_complete"] is True
+    finally:
+        profile_path = os.path.join(DEFAULT_ENROLLMENT_DIR, "test_user.dat")
+        if os.path.exists(profile_path):
+            os.remove(profile_path)
+
+
+def test_enrollment_finalize_persistence_failure(client):
+    """Verify finalize fails and returns 400 Bad Request when profile file is missing."""
+    client.post("/api/v1/enrollment/start", json={"user_id": "missing_user", "target_samples": 10})
     res = client.post("/api/v1/enrollment/finalize")
-    assert res.status_code == 200
-    data = res.json()
-    assert data["state"] == "COMPLETED"
-    assert data["progress"] == 1.0
-    assert data["is_complete"] is True
+    assert res.status_code == 400
+    assert "ENROLLMENT_STORAGE_FAILED" in res.json()["detail"]
 
 
 def test_enrollment_api_privacy_boundaries(client):

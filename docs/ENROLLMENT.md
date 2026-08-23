@@ -71,3 +71,17 @@ All endpoints are strictly bound to localhost (`127.0.0.1`):
 7. **Liveness Confirmation Gate:** Demands a natural blink to ensure physical presence.
 8. **Processing & Encryption:** Calculates centroid vector and persists with DPAPI.
 9. **Enrollment Complete:** Profile activated and monitoring initiated.
+
+---
+
+## 5. Biometric Template Integrity & Synthetic Vector Prevention
+
+### Critical Rule
+Never create or store synthetic biometric templates (such as all-ones, all-zeroes, or constant vectors) in production enrollment storage. Genuine templates must strictly originate from live webcam samples passing all quality gates.
+
+### Mathematical Integrity Gate (`validate_template_embedding`)
+At load and reload time, templates must pass automated validation:
+- **Non-Zero Variance:** $\text{std}(v) \ge 10^{-4}$ (rejects uniform constant vectors).
+- **L2 Norm Normalization:** $\|v\|_2 > 0$ and finite values ($\text{no NaN/Inf}$).
+- **Dimensionality:** Exactly $128\text{-D}$ for SFace feature embeddings.
+- **Privacy-Safe Diagnostics:** Logs similarity scores and thresholds without exposing the underlying vector array.

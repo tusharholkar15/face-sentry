@@ -82,7 +82,7 @@ foreach ($file in $modelFiles) {
 
 # 4. Check Enrollment Preservation
 Write-Host "`n[4/4] Checking biometric data..."
-$enrollmentFile = Join-Path $enrollmentDir "profile.enc"
+$enrollmentFile = Join-Path $enrollmentDir "default_user.dat"
 if (Test-Path $enrollmentFile) {
     Write-Host "  -> Found existing encrypted biometric profile. Preserving data."
 } else {

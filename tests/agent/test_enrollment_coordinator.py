@@ -44,8 +44,8 @@ def create_synthetic_frame_and_face(w: int = 120, h: int = 120, conf: float = 0.
 
 class MockRecognizer:
     def extract_embedding(self, img, face):
-        # Return deterministic synthetic 512-D vector
-        vec = np.ones(512, dtype=np.float32)
+        # Return deterministic mock vector with variance (non-uniform)
+        vec = np.arange(512, dtype=np.float32) + 1.0
         return vec / np.linalg.norm(vec)
 
 
@@ -130,3 +130,97 @@ def test_coordinator_cancel_clears_memory(mock_storage):
     # Finalize should fail after cancellation
     success, profile, err = coordinator.finalize_session(mock_storage)
     assert success is False
+
+
+def test_coordinator_save_failure(mock_storage):
+    """Verify finalization failure if storage.save_profile raises an exception."""
+    from unittest.mock import MagicMock
+    recognizer = MockRecognizer()
+    coordinator = EnrollmentCoordinator(recognizer=recognizer)
+    coordinator.start_session("charlie", target_samples=5)
+    img, face = create_synthetic_frame_and_face()
+    for _ in range(5):
+        coordinator.process_frame(img, [face], liveness_verified=True)
+    
+    mock_storage.save_profile = MagicMock(side_effect=RuntimeError("DPAPI write failed"))
+    success, profile, err = coordinator.finalize_session(mock_storage)
+    assert success is False
+    assert coordinator.state == "FAILED"
+    assert "DPAPI write failed" in err
+
+
+def test_coordinator_readback_failure(mock_storage):
+    """Verify finalization failure if profile read-back returns None or raises an exception."""
+    from unittest.mock import MagicMock
+    recognizer = MockRecognizer()
+    coordinator = EnrollmentCoordinator(recognizer=recognizer)
+    coordinator.start_session("dan", target_samples=5)
+    img, face = create_synthetic_frame_and_face()
+    for _ in range(5):
+        coordinator.process_frame(img, [face], liveness_verified=True)
+    
+    mock_storage.load_profile = MagicMock(return_value=None)
+    success, profile, err = coordinator.finalize_session(mock_storage)
+    assert success is False
+    assert coordinator.state == "FAILED"
+    assert "ENROLLMENT_STORAGE_FAILED" in err
+
+
+def test_storage_wrong_and_correct_paths(tmp_path):
+    """Verify wrong and correct storage path resolution logic."""
+    from pathlib import Path
+    custom_dir = tmp_path / "custom_enrollment"
+    storage = BiometricStorage(enrollment_dir=str(custom_dir))
+    assert storage.enrollment_dir == custom_dir
+    assert custom_dir.exists()
+
+
+def test_storage_missing_and_corrupted_profile(mock_storage, tmp_path):
+    """Verify has_profile for missing files and load_profile behavior for corrupted data."""
+    from pathlib import Path
+    assert mock_storage.has_profile("non_existent_user") is False
+    
+    # Create a corrupted profile file (random unstructured bytes)
+    corrupted_file = Path(mock_storage.enrollment_dir) / "corrupted_user.dat"
+    corrupted_file.write_bytes(b"corrupted binary data")
+    
+    # verify has_profile is True because file exists and is > 0 bytes
+    assert mock_storage.has_profile("corrupted_user") is True
+    
+    # load_profile must raise an error for corrupted data
+    with pytest.raises(Exception):
+        mock_storage.load_profile("corrupted_user")
+
+
+def test_biometric_validation_limits():
+    """Verify template validation limits for NaNs, Infs, zero norms, and synthetic vectors."""
+    from apps.agent.facesentry_agent.biometric_storage import validate_template_embedding
+    
+    # 1. NaN/Inf rejection
+    nan_vec = np.arange(128, dtype=np.float32)
+    nan_vec[0] = np.nan
+    valid, reason = validate_template_embedding(nan_vec)
+    assert valid is False
+    assert reason == "NON_FINITE_VALUES"
+
+    # 2. Zero-norm rejection
+    zero_vec = np.zeros(128, dtype=np.float32)
+    valid, reason = validate_template_embedding(zero_vec)
+    assert valid is False
+    assert reason == "ZERO_NORM"
+
+    # 3. Constant/uniform (synthetic) template rejection
+    synth_vec = np.ones(128, dtype=np.float32) * 0.5
+    valid, reason = validate_template_embedding(synth_vec)
+    assert valid is False
+    assert reason == "SYNTHETIC_UNIFORM_VECTOR"
+
+
+def test_production_appdata_path():
+    """Verify that get_base_dir resolves to AppData/Local/FaceSentry when not in dev mode."""
+    from packages.shared.constants import get_base_dir
+    from unittest.mock import patch
+    import os
+    with patch.dict(os.environ, {"FACESENTRY_DEV_MODE": "0", "LOCALAPPDATA": "C:\\Users\\TestUser\\AppData\\Local"}):
+        base_dir = get_base_dir()
+        assert base_dir == "C:\\Users\\TestUser\\AppData\\Local\\FaceSentry"

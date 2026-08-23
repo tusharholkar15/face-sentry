@@ -39,6 +39,28 @@ class EnrolledProfile:
         )
 
 
+def validate_template_embedding(vec: np.ndarray, expected_dim: Optional[int] = None) -> Tuple[bool, str]:
+    """
+    Validate biometric template embedding for numerical validity and non-synthetic distribution.
+    Rejects empty vectors, dimension mismatches, NaNs/Infs, zero-norm vectors,
+    and synthetic uniform/constant vectors (where variance/std dev is zero).
+    """
+    if vec is None or vec.size == 0:
+        return False, "EMPTY_VECTOR"
+    flat = vec.flatten().astype(np.float32)
+    if expected_dim is not None and flat.shape[0] != expected_dim:
+        return False, f"DIMENSION_MISMATCH (expected {expected_dim}, got {flat.shape[0]})"
+    if not np.all(np.isfinite(flat)):
+        return False, "NON_FINITE_VALUES"
+    norm = float(np.linalg.norm(flat))
+    if norm < 1e-5:
+        return False, "ZERO_NORM"
+    # Detect synthetic uniform/constant vectors (such as np.ones or repeat constant values)
+    if float(np.std(flat)) < 1e-4:
+        return False, "SYNTHETIC_UNIFORM_VECTOR"
+    return True, "VALID"
+
+
 class BiometricStorageBackend(ABC):
     """Abstract interface for encrypting and decrypting biometric payloads."""
 

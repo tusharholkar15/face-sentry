@@ -7,17 +7,19 @@ FaceSentry has completed all core development phases, packaging, and real Window
 
 ## Testing Summary
 
-- **Total Automated Tests**: 131
-- **Automated Test Results**: 100% PASS (131/131)
+- **Total Automated Tests**: 134
+- **Automated Test Results**: 100% PASS (134/134)
 - **Packaged Executable**: Verified (`%LOCALAPPDATA%\FaceSentry\FaceSentryAgent.exe`)
 - **Real Windows `LockWorkStation` API**: Verified
+- **Biometric Template Validation**: Verified (synthetic/corrupted vectors rejected; privacy-safe diagnostics active)
 - **Real Unknown-Face Hardware Lock**: Physically Verified
 - **Physical Absence-Only Lock**: Automated pipeline verified; awaiting physical human observation of screen transition.
 
-## Security & Privacy Findings
+## Security, Privacy & Recognition Findings
 
+- **Biometric Profile Integrity**: Resolved issue where a synthetic all-ones placeholder profile caused false `UNKNOWN_FACE` classifications for real users. Biometric template validation (`validate_template_embedding`) now enforces non-synthetic variance, valid 128-D dimensions, finite floats, and rejects constant/zero vectors.
 - **Security Audit (`docs/SECURITY_AUDIT.md`)**: Completed. Zero CRITICAL/HIGH findings.
-- **Privacy Audit (`docs/PRIVACY_AUDIT.md`)**: Completed. Verified Zero-Cloud transmission, DPAPI encryption of biometrics at rest, 128-D SFace embedding extraction, and zero raw image storage on disk.
+- **Privacy Audit (`docs/PRIVACY_AUDIT.md`)**: Completed. Verified Zero-Cloud transmission, DPAPI encryption of biometrics at rest, 128-D SFace embedding extraction, privacy-safe diagnostic logging (zero vector leakage), and zero raw image storage on disk.
 
 ## Measured Performance Benchmarks (`docs/PERFORMANCE.md`)
 
@@ -31,9 +33,11 @@ FaceSentry has completed all core development phases, packaging, and real Window
 ## Final Release Gate
 
 To promote from `RELEASE_CANDIDATE` to `RELEASE_READY`:
-1. Run the real absence lock test on physical hardware:
+1. Complete genuine biometric enrollment via Dashboard / Enrollment Wizard (`scripts\check_installation.ps1` confirms genuine profile).
+2. Verify genuine enrolled user recognition and unknown-user rejection.
+3. Run the real absence lock test on physical hardware:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .\scripts\e2e_hardware_test.ps1 -Mode absence-lock -RealLock
    ```
-2. Cover the camera lens or step out of camera view for 10 seconds.
-3. Confirm that Windows physically switches to the Lock / Sign-in screen.
+4. Cover the camera lens or step out of camera view for 10 seconds.
+5. Confirm that Windows physically switches to the Lock / Sign-in screen.

@@ -19,8 +19,9 @@ This checklist must be fully verified by the operator before the agent is deemed
 
 ## 4. Enrollment & Backend
 - [x] Web dashboard connects successfully to the agent via WebSocket.
-- [x] Biometric enrollment successfully collects high-quality frames.
-- [x] `profile.enc` is created and encrypted with Windows DPAPI in `%LOCALAPPDATA%\FaceSentry\enrollment`.
+- [ ] Genuine biometric enrollment captured via Dashboard / Wizard (synthetic templates strictly forbidden).
+- [ ] `default_user.dat` created and encrypted with Windows DPAPI in `%LOCALAPPDATA%\FaceSentry\enrollment`.
+- [x] Template integrity gate (`validate_template_embedding`) rejects constant/synthetic/zero-norm vectors.
 - [x] PIN fallback registration succeeds with Argon2id hashing.
 
 ## 5. End-to-End Operation (Hardware Tested)
@@ -36,10 +37,10 @@ This checklist must be fully verified by the operator before the agent is deemed
 ## 6. Uninstallation & Data Privacy
 - [x] `uninstall_windows.ps1` unregisters the Task Scheduler entry successfully.
 - [x] `uninstall_windows.ps1` prompts explicitly before deleting `%LOCALAPPDATA%\FaceSentry`.
-- [x] Upgrading the agent preserves `profile.enc` and `facesentry.db`.
+- [x] Upgrading the agent preserves `default_user.dat` and `facesentry.db`.
 
 ## 7. Audits & Performance
 - [x] `SECURITY_AUDIT.md` completed. Zero CRITICAL/HIGH findings exist.
-- [x] `PRIVACY_AUDIT.md` completed. Verified zero external transmission and no raw image storage.
+- [x] `PRIVACY_AUDIT.md` completed. Verified zero external transmission, privacy-safe diagnostics, and no raw image storage.
 - [x] `PERFORMANCE.md` updated with measured hardware benchmarks (YuNet: 9.78ms, SFace: 7.95ms).
-- [x] All 131 automated `pytest` suites pass.
+- [x] All 134 automated `pytest` suites pass (100%).

@@ -185,7 +185,7 @@ class FaceSentryAgent:
         rec_result = None
         detected_faces = []
         if camera_available and frame is not None and self.recognition_engine:
-            rec_result = self.recognition_engine.recognize(frame)
+            rec_result = self.recognition_engine.process_frame(frame)
             if rec_result.detected_face:
                 detected_faces.append(rec_result.detected_face)
 

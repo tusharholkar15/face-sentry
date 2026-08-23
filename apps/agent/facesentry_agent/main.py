@@ -27,9 +27,12 @@ from apps.agent.facesentry_agent.recognition import FaceRecognitionEngine, Recog
 from apps.agent.facesentry_agent.liveness import TemporalLivenessStateMachine
 from apps.agent.facesentry_agent.decision_engine import AuthenticationDecisionEngine, DecisionEvent, DecisionEventType, DecisionState
 from apps.agent.facesentry_agent.lock_manager import WorkstationLockManager
+from apps.agent.facesentry_agent.enrollment_coordinator import EnrollmentCoordinator
+from packages.shared.schemas import EnrollmentStatusResponse
 from apps.agent.camera import CameraManager
 import urllib.request
 import json
+from typing import Optional
 
 logger = logging.getLogger("facesentry")
 
@@ -96,6 +99,38 @@ def publish_telemetry_event(event: DecisionEvent):
 
     threading.Thread(target=_send, daemon=True).start()
 
+def get_remote_enrollment_status() -> Optional[dict]:
+    """Poll local FastAPI backend for active enrollment wizard requests."""
+    try:
+        req = urllib.request.Request(
+            "http://127.0.0.1:8000/api/v1/enrollment/status",
+            headers={'Content-Type': 'application/json'},
+            method='GET'
+        )
+        with urllib.request.urlopen(req, timeout=0.2) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+    except Exception:
+        return None
+
+def post_enrollment_update(status_resp: EnrollmentStatusResponse):
+    """Push real-time sample progress and guidance to FastAPI broker."""
+    def _send():
+        try:
+            payload = {"status": status_resp.model_dump()}
+            payload_bytes = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(
+                "http://127.0.0.1:8000/api/v1/enrollment/update_progress",
+                data=payload_bytes,
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=0.2):
+                pass
+        except Exception:
+            pass
+
+    threading.Thread(target=_send, daemon=True).start()
+
 async def main_loop(mode: str):
     """The core operational loop of the agent."""
     logger.info(f"Starting {SYSTEM_NAME} v{VERSION} in {mode} mode.")
@@ -119,6 +154,7 @@ async def main_loop(mode: str):
         # 3. Initialize Engines
         recognition_engine = FaceRecognitionEngine(detector, recognizer, storage)
         liveness_engine = TemporalLivenessStateMachine()
+        enrollment_coordinator = EnrollmentCoordinator(detector=detector, recognizer=recognizer)
         
         # 4. Initialize Decision & Lock Managers
         decision_engine = AuthenticationDecisionEngine(on_event=publish_telemetry_event)
@@ -137,23 +173,86 @@ async def main_loop(mode: str):
         # Loop variables
         last_enrollment_check = 0.0
         enrollment_warning_printed = False
+        last_api_check = 0.0
+        api_enrollment_active = False
         
         while True:
-            # Re-check enrollment periodically if missing
+            now = time.time()
+
+            # Check if an interactive enrollment session was initiated via the Web Dashboard
+            if now - last_api_check > 0.4:
+                last_api_check = now
+                remote_status = get_remote_enrollment_status()
+                if remote_status:
+                    remote_state = remote_status.get("state", "IDLE")
+                    if remote_state in ["CAPTURING", "LIVENESS_CHECK"]:
+                        api_enrollment_active = True
+                        if enrollment_coordinator.state in ["IDLE", "CANCELLED", "COMPLETED"]:
+                            enrollment_coordinator.start_session(
+                                user_id="default_user",
+                                target_samples=remote_status.get("required_samples", 15)
+                            )
+                    elif remote_state == "CANCELLED":
+                        api_enrollment_active = False
+                        if enrollment_coordinator.state != "IDLE":
+                            enrollment_coordinator.cancel_session()
+                    elif remote_state in ["COMPLETED", "IDLE"]:
+                        if api_enrollment_active and enrollment_coordinator.captured_sample_count >= 5:
+                            success, profile, err = enrollment_coordinator.finalize_session(storage)
+                            if success:
+                                recognition_engine.reload_profile()
+                                decision_engine.reset()
+                                logger.info("Enrollment finalized on COMPLETED signal.")
+                        api_enrollment_active = False
+
+            # Read frame
+            if not camera.is_connected():
+                camera.open()
+                
+            ret, frame = camera.read_frame()
+            camera_available = ret and frame is not None
+
+            # Handle live enrollment session
+            if api_enrollment_active or enrollment_coordinator.state in ["CAPTURING", "LIVENESS_CHECK", "PROCESSING"]:
+                if camera_available:
+                    faces = detector.detect(frame)
+                    liveness_faces = [faces[0]] if len(faces) == 1 else []
+                    liveness_res = liveness_engine.process_frame(liveness_faces)
+                    is_live_ok = bool(liveness_res.verified or liveness_res.blink_detected) if liveness_res else False
+                    
+                    enroll_status = enrollment_coordinator.process_frame(
+                        frame,
+                        detected_faces=faces,
+                        liveness_verified=is_live_ok
+                    )
+                    post_enrollment_update(enroll_status)
+                    
+                    if enrollment_coordinator.captured_sample_count >= enrollment_coordinator._target_samples:
+                        success, profile, err = enrollment_coordinator.finalize_session(storage)
+                        if success:
+                            completed_status = enrollment_coordinator.get_status()
+                            post_enrollment_update(completed_status)
+                            recognition_engine.reload_profile()
+                            decision_engine.reset()
+                            api_enrollment_active = False
+                            logger.info("Enrollment finalized successfully. Continuous protection active.")
+                
+                await asyncio.sleep(1 / 15.0)
+                continue
+            
+            # If not enrolled and not in enrollment session, wait in standby mode without locking
             if not recognition_engine.is_enrolled:
-                now = time.time()
                 if now - last_enrollment_check > 5.0:
                     last_enrollment_check = now
                     if recognition_engine.reload_profile():
                         logger.info("Enrollment profile successfully loaded.")
                     else:
                         if not enrollment_warning_printed:
-                            logger.error("ENROLLMENT_REQUIRED: No biometric profile found. System cannot authenticate.")
+                            logger.info("ENROLLMENT_REQUIRED: No biometric profile found. Awaiting enrollment via Web UI.")
                             enrollment_warning_printed = True
-                        
-                        # We skip decision engine and just loop if no enrollment
-                        await asyncio.sleep(1.0)
-                        continue
+                
+                await asyncio.sleep(0.2)
+                continue
             
             # Read frame
             if not camera.is_connected():
@@ -189,7 +288,12 @@ async def main_loop(mode: str):
             if rec_result and rec_result.face_count == 0:
                 logger.debug(f"[FRAME] No face in frame (Absence duration: {decision_result.absence_duration:.1f}s)")
             elif rec_result and rec_result.face_count > 0:
-                logger.debug(f"[FRAME] Face in frame: count={rec_result.face_count}, recognized={rec_result.recognized}, match_reason={rec_result.reason}")
+                logger.debug(
+                    f"[FRAME] Face in frame: count={rec_result.face_count}, "
+                    f"recognition_similarity={rec_result.similarity:.4f}, "
+                    f"recognition_threshold={recognition_engine.similarity_threshold:.4f}, "
+                    f"recognized={str(rec_result.recognized).lower()}, match_reason={rec_result.reason}"
+                )
             
             # Dispatch Lock Request
             if decision_result.lock_requested:

@@ -12,7 +12,7 @@ import numpy as np
 
 from .models.face_detector import FaceDetector, DetectedFace
 from .models.face_recognizer import FaceRecognizer, compute_cosine_similarity
-from .biometric_storage import BiometricStorage, EnrolledProfile
+from .biometric_storage import BiometricStorage, EnrolledProfile, validate_template_embedding
 from packages.shared.constants import DEFAULT_SIMILARITY_THRESHOLD
 
 logger = logging.getLogger("facesentry.recognition")
@@ -56,7 +56,20 @@ class FaceRecognitionEngine:
         """Load or refresh decrypted enrolled biometric template from storage."""
         try:
             if self.storage.has_profile(self.profile_name):
-                self._active_profile = self.storage.load_profile(self.profile_name)
+                profile = self.storage.load_profile(self.profile_name)
+                is_valid, validation_reason = validate_template_embedding(
+                    profile.reference_embedding,
+                    expected_dim=profile.embedding_dim,
+                )
+                if not is_valid:
+                    logger.warning(
+                        f"Enrolled biometric profile '{self.profile_name}' is invalid or synthetic "
+                        f"({validation_reason}). Disabling active profile until genuine enrollment."
+                    )
+                    self._active_profile = None
+                    return False
+
+                self._active_profile = profile
                 logger.info(f"Loaded active biometric profile: {self._active_profile}")
                 return True
             else:
@@ -132,6 +145,14 @@ class FaceRecognitionEngine:
 
             is_match = similarity >= self.similarity_threshold
             reason = "MATCH_CONFIRMED" if is_match else "SIMILARITY_BELOW_THRESHOLD"
+
+            # Privacy-safe diagnostic logging (strictly metadata/scores, zero biometric vectors/landmarks)
+            logger.info(
+                f"Face recognition evaluation: "
+                f"recognition_similarity={similarity:.4f} "
+                f"recognition_threshold={self.similarity_threshold:.4f} "
+                f"recognized={str(is_match).lower()}"
+            )
 
             return RecognitionResult(
                 recognized=is_match,
